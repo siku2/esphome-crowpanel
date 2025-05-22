@@ -577,5 +577,76 @@ void CrowPanelEPaper4P2In::dump_config() {
   LOG_UPDATE_INTERVAL(this);
 }
 
+// ========================================================
+// CrowPanelEPaper5P79In Implementation (5.79" B/W display)
+// ========================================================
+
+void CrowPanelEPaper5P79In::initialize() {
+  ESP_LOGD(TAG, "Initializing CrowPanel 4.2in display");
+
+  // Send initialization sequence using the predefined commands
+  this->send_command_sequence_(display_start_sequence);
+}
+
+void CrowPanelEPaper5P79In::prepare_for_update_(UpdateMode mode) {
+  if (mode == UpdateMode::FULL) {
+    ESP_LOGD(TAG, "Preparing for FULL update mode");
+    
+    // Set BorderWavefrom for full refresh
+    this->command(CMD_BORDER_WAVEFORM);
+    this->data(PARAM_BORDER_FULL);
+    
+    // Additional display update control settings 
+    this->command(CMD_DISPLAY_UPDATE_CONTROL);
+    this->data(0x40);
+    this->data(0x00);
+  } else {
+    ESP_LOGD(TAG, "Preparing for PARTIAL update mode");
+    
+    // Set BorderWavefrom for partial refresh
+    this->command(CMD_BORDER_WAVEFORM);
+    this->data(PARAM_BORDER_PARTIAL);
+    
+    // Additional settings for partial update
+    this->command(CMD_DISPLAY_UPDATE_CONTROL);
+    this->data(0x00);
+    this->data(0x00);
+  }
+}
+
+void CrowPanelEPaper5P79In::display() {
+  ESP_LOGD(TAG, "E-Paper display refresh starting");
+  // Set the display mode based on update type
+  UpdateMode mode = this->is_full_update_ ? UpdateMode::FULL : UpdateMode::PARTIAL;
+  this->prepare_for_update_(mode);
+  // Reset RAM address counters before writing data
+  this->command(CMD_SET_X_COUNTER);
+  this->data(0x00);
+  this->command(CMD_SET_Y_COUNTER);
+  this->data(0x00);
+  this->data(0x00);
+  // Send command to write to BLACK/WHITE RAM
+  this->command(CMD_WRITE_RAM);
+  // Start non-blocking data transfer (handled in state machine)
+  this->start_data_();
+  this->data_send_index_ = 0;
+}
+
+void CrowPanelEPaper5P79In::deep_sleep() {
+  ESP_LOGD(TAG, "Entering deep sleep mode");
+  
+  // Send deep sleep sequence
+  this->send_command_sequence_(display_stop_sequence);
+}
+
+void CrowPanelEPaper5P79In::dump_config() {
+  LOG_DISPLAY("", "CrowPanel E-Paper", this);
+  ESP_LOGCONFIG(TAG, "  Model: 5.79in");
+  LOG_PIN("  Reset Pin: ", this->reset_pin_);
+  LOG_PIN("  DC Pin: ", this->dc_pin_);
+  LOG_PIN("  Busy Pin: ", this->busy_pin_);
+  LOG_UPDATE_INTERVAL(this);
+}
+
 }  // namespace crowpanel_epaper
 }  // namespace esphome
