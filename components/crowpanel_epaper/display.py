@@ -27,9 +27,13 @@ CrowPanelEPaper = crowpanel_epaper_ns.class_("CrowPanelEPaper", CrowPanelEPaperB
 CrowPanelEPaper4P2In = crowpanel_epaper_ns.class_(
     "CrowPanelEPaper4P2In", CrowPanelEPaper
 )
+CrowPanelEPaper5P79In = crowpanel_epaper_ns.class_(
+    "CrowPanelEPaper5P79In", CrowPanelEPaper
+)
 
 MODELS = {
     "4.20in": CrowPanelEPaper4P2In,
+    "5.79in": CrowPanelEPaper5P79In,
 }
 
 CONFIG_SCHEMA = cv.All(
