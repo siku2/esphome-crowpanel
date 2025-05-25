@@ -92,6 +92,8 @@ class CrowPanelEPaperBase : public display::DisplayBuffer {
   
   bool calculate_rotated_coords_(int x, int y, int width, int height, int *out_x, int *out_y);
 
+  virtual void update_sending_data_(uint32_t now);
+
   GPIOPin *dc_pin_{nullptr};
   GPIOPin *cs_pin_{nullptr};
   GPIOPin *clk_pin_{nullptr};
@@ -157,7 +159,11 @@ class CrowPanelEPaper5P79In : public CrowPanelEPaper {
   int get_native_width_() override { return NATIVE_WIDTH_5P79IN; }
   int get_native_height_() override { return NATIVE_HEIGHT_5P79IN; }
   
+  void update_sending_data_(uint32_t now) override;
   void prepare_for_update_(UpdateMode mode);
+
+  void set_partial_ram_area_(uint8_t target, uint16_t x, uint16_t y, uint16_t width, uint16_t height);
+  void write_data_from_buffer(uint16_t x_start, uint16_t y_start, uint16_t width, uint16_t height);
 };
 
 }  // namespace crowpanel_epaper

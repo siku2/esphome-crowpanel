@@ -22,6 +22,12 @@ static const uint8_t CMD_SET_Y_ADDR = 0x45;
 static const uint8_t CMD_SET_X_COUNTER = 0x4E;
 static const uint8_t CMD_SET_Y_COUNTER = 0x4F;
 static const uint8_t CMD_SET_MUX = 0x01;
+static const uint8_t CMD_TEMP_SENSOR_CTL = 0x18;
+static const uint8_t CMD_SET_TEMP = 0x1A;
+
+// Explicit target selection when the SSD1683 is used in cascade mode.
+static const uint8_t CMD_TARGET_PRIMARY = 0x00;
+static const uint8_t CMD_TARGET_SECONDARY = 0x80;
 
 // SSD1683 EPD Driver chip command parameters
 static const uint8_t PARAM_BORDER_FULL = 0x05;
@@ -29,6 +35,9 @@ static const uint8_t PARAM_BORDER_PARTIAL = 0x80;
 static const uint8_t PARAM_FULL_UPDATE = 0xF7;
 static const uint8_t PARAM_PARTIAL_UPDATE = 0xFF;
 static const uint8_t PARAM_DEEP_SLEEP_MODE = 0x01;
+static const uint8_t PARAM_INTERNAL_TEMP_SENSOR = 0x80;
+static const uint8_t PARAM_X_INC_Y_INC = 0x03; // left-right, top-down
+static const uint8_t PARAM_X_DEC_Y_INC = 0x02; // right-left, top-down
 
 // SSD1683 EPD Driver chip command sequences
 // Format: command, num_args, arg1, arg2...
@@ -40,12 +49,38 @@ const uint8_t display_start_sequence[] = {
   CMD_SET_MUX, 0x03, 0x2b, 0x01, 0x00,               // Set MUX as 300
   CMD_DISPLAY_UPDATE_CONTROL, 0x02, 0x40, 0x00,      // Display update control
   CMD_BORDER_WAVEFORM, 0x01, PARAM_BORDER_FULL,      // Border waveform for full refresh
-    CMD_DATA_ENTRY_MODE, 0x01, 0x03,                   // X-mode
+  CMD_DATA_ENTRY_MODE, 0x01, PARAM_X_INC_Y_INC,      // Data entry mode (X+ Y+)
   CMD_SET_X_ADDR, 0x02, 0x00, 0x31,                  // Set RAM X Address Start/End Pos (0 to 49 -> 400 pixels)
   CMD_SET_Y_ADDR, 0x04, 0x00, 0x00, 0x2b, 0x01,      // Set RAM Y Address Start/End Pos (0 to 299 -> 300 pixels)
   CMD_SET_X_COUNTER, 0x01, 0x00,                     // Set RAM X Address counter
   CMD_SET_Y_COUNTER, 0x02, 0x00, 0x00,               // Set RAM Y Address counter
   COMMAND_END_MARKER, COMMAND_END_MARKER             // End marker
+};
+
+const uint8_t display_start_sequence_5p79in[] = {
+  CMD_SOFT_RESET, DELAY_FLAG, 10,                        // Soft reset and 10ms delay
+  // CMD_SET_MUX, 0x03, 0x2b, 0x01, 0x00,                   // Set MUX as 300
+  CMD_TEMP_SENSOR_CTL, 0x01, PARAM_INTERNAL_TEMP_SENSOR, // Enable internal temperature sensor
+  // CMD_DISPLAY_UPDATE_CONTROL, 0x02, 0x40, 0x10,          // Display update control
+  CMD_UPDATE_SEQUENCE, 0x01, 0xB1,                       // Enable clock signal, Load temperature value, Load LUT (black/white mode), Disable clock signal
+  CMD_DISPLAY_UPDATE, DELAY_FLAG, 10,                    // Master activation with 10ms delay
+  CMD_SET_TEMP, 0x02, 0x64, 0x00,                        // Write to temperature register
+  CMD_UPDATE_SEQUENCE, 0x01, 0x91,                       // Load temperature value, Load LUT (black/white mode), Disable clock signal
+  CMD_DISPLAY_UPDATE, DELAY_FLAG, 10,                    // Master activation with 10ms delay
+  COMMAND_END_MARKER, COMMAND_END_MARKER                 // End marker
+  // CMD_BORDER_WAVEFORM, 0x01, PARAM_BORDER_FULL,          // Border waveform for full refresh
+  // Primary panel
+  // CMD_DATA_ENTRY_MODE, 0x01, PARAM_X_INC_Y_INC,      // Data entry mode (X+ Y+)
+  // CMD_SET_X_ADDR,      0x02, 0x00, 0x31,             // Set RAM X Address Start/End Pos (0 to 49 -> 400 pixels)
+  // CMD_SET_Y_ADDR,      0x04, 0x00, 0x00, 0x0f, 0x01, // Set RAM Y Address Start/End Pos (0 to 271 -> 272 pixels)
+  // CMD_SET_X_COUNTER,   0x01, 0x00,                   // Set RAM X Address counter
+  // CMD_SET_Y_COUNTER,   0x02, 0x00, 0x00,             // Set RAM Y Address counter
+  // // Secondary panel
+  // CMD_DATA_ENTRY_MODE | CMD_TARGET_SECONDARY, 0x01, PARAM_X_INC_Y_INC,      // Data entry mode (X+ Y+)
+  // CMD_SET_X_ADDR | CMD_TARGET_SECONDARY,      0x02, 0x00, 0x31,             // Set RAM X Address Start/End Pos (0 to 49 -> 400 pixels)
+  // CMD_SET_Y_ADDR | CMD_TARGET_SECONDARY,      0x04, 0x00, 0x00, 0x0f, 0x01, // Set RAM Y Address Start/End Pos (0 to 271 -> 272 pixels)
+  // CMD_SET_X_COUNTER | CMD_TARGET_SECONDARY,   0x01, 0x00,                   // Set RAM X Address counter
+  // CMD_SET_Y_COUNTER | CMD_TARGET_SECONDARY,   0x02, 0x00, 0x00,             // Set RAM Y Address counter
 };
 
 const uint8_t display_stop_sequence[] = {
@@ -55,6 +90,14 @@ const uint8_t display_stop_sequence[] = {
 
 const uint8_t full_refresh_sequence[] = {
   CMD_UPDATE_SEQUENCE, 0x01, PARAM_FULL_UPDATE,      // Display update sequence option (full)
+  CMD_DISPLAY_UPDATE, DELAY_FLAG, 10,                // Master activation with 10ms delay
+  COMMAND_END_MARKER, COMMAND_END_MARKER             // End marker
+};
+
+const uint8_t fast_full_refresh_sequence[] = {
+  CMD_DISPLAY_UPDATE_CONTROL, 0x02, 0x40, 0x10,      // Display Update Control (bypass RED, cascade application)
+  CMD_SET_TEMP, 0x02, 0x64, 0x00,                    // Set temperature register
+  CMD_UPDATE_SEQUENCE, 0x01, 0xd7,                   // Display update control 2
   CMD_DISPLAY_UPDATE, DELAY_FLAG, 10,                // Master activation with 10ms delay
   COMMAND_END_MARKER, COMMAND_END_MARKER             // End marker
 };
@@ -149,7 +192,9 @@ void CrowPanelEPaperBase::send_command_sequence_(const uint8_t* sequence) {
     if (num_args & DELAY_FLAG) {
       // This is a delay command, skip the delay value
       // The actual delay is handled by the state machine
-      i++;
+      // TODO: no it isn't?
+      uint8_t delay_ms = sequence[i++];
+      delay(delay_ms); // Delay for the specified time
       // Continue sending commands (don't break)
       num_args &= ARG_COUNT_MASK; // Clear delay bit for arg count
     }
@@ -334,27 +379,7 @@ void CrowPanelEPaperBase::loop() {
       this->state_start_time_ = now;
       break;
     case EpdState::UPDATE_SENDING_DATA: {
-      // Send a chunk of data per loop
-      const size_t CHUNK_SIZE = 32;
-      size_t buffer_len = this->get_buffer_length_();
-      size_t i = this->data_send_index_;
-      size_t end = (i + CHUNK_SIZE < buffer_len) ? (i + CHUNK_SIZE) : buffer_len;
-      for (; i < end; ++i) {
-        this->write_byte_soft_spi(this->buffer_[i]);
-      }
-      this->data_send_index_ = end;
-      if (this->data_send_index_ >= buffer_len) {
-        this->end_data_();
-        // Send refresh command based on update mode
-        UpdateMode mode = this->is_full_update_ ? UpdateMode::FULL : UpdateMode::PARTIAL;
-        if (mode == UpdateMode::FULL) {
-          this->send_command_sequence_(full_refresh_sequence);
-        } else {
-          this->send_command_sequence_(partial_refresh_sequence);
-        }
-        this->state_ = EpdState::UPDATE_WAIT_REFRESH;
-        this->state_start_time_ = now;
-      }
+      this->update_sending_data_(now);
       break;
     }
     case EpdState::UPDATE_WAIT_REFRESH:
@@ -371,6 +396,30 @@ void CrowPanelEPaperBase::loop() {
     case EpdState::DEEP_SLEEP:
       // Stay in deep sleep state
       break;
+  }
+}
+
+void CrowPanelEPaperBase::update_sending_data_(uint32_t now) {
+  // Send a chunk of data per loop
+  const size_t CHUNK_SIZE = 32;
+  size_t buffer_len = this->get_buffer_length_();
+  size_t i = this->data_send_index_;
+  size_t end = (i + CHUNK_SIZE < buffer_len) ? (i + CHUNK_SIZE) : buffer_len;
+  for (; i < end; ++i) {
+    this->write_byte_soft_spi(this->buffer_[i]);
+  }
+  this->data_send_index_ = end;
+  if (this->data_send_index_ >= buffer_len) {
+    this->end_data_();
+    // Send refresh command based on update mode
+    UpdateMode mode = this->is_full_update_ ? UpdateMode::FULL : UpdateMode::PARTIAL;
+    if (mode == UpdateMode::FULL) {
+      this->send_command_sequence_(full_refresh_sequence);
+    } else {
+      this->send_command_sequence_(partial_refresh_sequence);
+    }
+    this->state_ = EpdState::UPDATE_WAIT_REFRESH;
+    this->state_start_time_ = now;
   }
 }
 
@@ -579,57 +628,158 @@ void CrowPanelEPaper4P2In::dump_config() {
 
 // ========================================================
 // CrowPanelEPaper5P79In Implementation (5.79" B/W display)
+//
+// This model uses the cascade mode of the SSD1683 to chain
+// two controllers together.
+// The left half (closest to the connector) is the
+// primary controller.
 // ========================================================
 
 void CrowPanelEPaper5P79In::initialize() {
-  ESP_LOGD(TAG, "Initializing CrowPanel 4.2in display");
+  ESP_LOGD(TAG, "Initializing CrowPanel 5.79in display");
 
   // Send initialization sequence using the predefined commands
-  this->send_command_sequence_(display_start_sequence);
+  this->send_command_sequence_(display_start_sequence_5p79in);
 }
 
 void CrowPanelEPaper5P79In::prepare_for_update_(UpdateMode mode) {
-  if (mode == UpdateMode::FULL) {
-    ESP_LOGD(TAG, "Preparing for FULL update mode");
+  // if (mode == UpdateMode::FULL) {
+  //   ESP_LOGD(TAG, "Preparing for FULL update mode");
     
-    // Set BorderWavefrom for full refresh
-    this->command(CMD_BORDER_WAVEFORM);
-    this->data(PARAM_BORDER_FULL);
+  //   // Set BorderWavefrom for full refresh
+  //   this->command(CMD_BORDER_WAVEFORM);
+  //   this->data(PARAM_BORDER_FULL);
     
-    // Additional display update control settings 
-    this->command(CMD_DISPLAY_UPDATE_CONTROL);
-    this->data(0x40);
-    this->data(0x00);
-  } else {
-    ESP_LOGD(TAG, "Preparing for PARTIAL update mode");
+  //   // Additional display update control settings 
+  //   this->command(CMD_DISPLAY_UPDATE_CONTROL);
+  //   this->data(0x40);
+  //   this->data(0x00);
+  // } else {
+  //   ESP_LOGD(TAG, "Preparing for PARTIAL update mode");
     
-    // Set BorderWavefrom for partial refresh
-    this->command(CMD_BORDER_WAVEFORM);
-    this->data(PARAM_BORDER_PARTIAL);
+  //   // Set BorderWavefrom for partial refresh
+  //   this->command(CMD_BORDER_WAVEFORM);
+  //   this->data(PARAM_BORDER_PARTIAL);
     
-    // Additional settings for partial update
-    this->command(CMD_DISPLAY_UPDATE_CONTROL);
-    this->data(0x00);
-    this->data(0x00);
-  }
+  //   // Additional settings for partial update
+  //   this->command(CMD_DISPLAY_UPDATE_CONTROL);
+  //   this->data(0x00);
+  //   this->data(0x00);
+  // }
 }
 
 void CrowPanelEPaper5P79In::display() {
   ESP_LOGD(TAG, "E-Paper display refresh starting");
   // Set the display mode based on update type
   UpdateMode mode = this->is_full_update_ ? UpdateMode::FULL : UpdateMode::PARTIAL;
-  this->prepare_for_update_(mode);
+  // this->prepare_for_update_(mode);
   // Reset RAM address counters before writing data
-  this->command(CMD_SET_X_COUNTER);
-  this->data(0x00);
-  this->command(CMD_SET_Y_COUNTER);
-  this->data(0x00);
-  this->data(0x00);
-  // Send command to write to BLACK/WHITE RAM
-  this->command(CMD_WRITE_RAM);
-  // Start non-blocking data transfer (handled in state machine)
-  this->start_data_();
+  // Primary controller
+  // this->command(CMD_SET_X_COUNTER);
+  // this->data(0x00);
+  // this->command(CMD_SET_Y_COUNTER);
+  // this->data(0x00);
+  // this->data(0x00);
+  // // Secondary controller
+  // this->command(CMD_SET_X_COUNTER | CMD_TARGET_SECONDARY);
+  // this->data(0x00);
+  // this->command(CMD_SET_Y_COUNTER | CMD_TARGET_SECONDARY);
+  // this->data(0x00);
+  // this->data(0x00);
+  // // Send command to write to BLACK/WHITE RAM
+  // this->command(CMD_WRITE_RAM);
+  // // Start non-blocking data transfer (handled in state machine)
+  // this->start_data_();
   this->data_send_index_ = 0;
+}
+
+void CrowPanelEPaper5P79In::set_partial_ram_area_(uint8_t target, uint16_t x, uint16_t y, uint16_t width, uint16_t height) {
+  ESP_LOGD(TAG, "Setting partial RAM area: target=%02X, x=%d, y=%d, width=%d, height=%d", 
+           target, x, y, width, height);
+  this->command(CMD_DATA_ENTRY_MODE | target);
+  this->data((target != CMD_TARGET_PRIMARY) ? PARAM_X_DEC_Y_INC : PARAM_X_INC_Y_INC); // Set data entry mode to X+ Y+
+
+  int x_end = x + width - 1;
+  int y_end = y + height - 1;
+
+  this->command(CMD_SET_X_ADDR | target);
+  if (target != CMD_TARGET_PRIMARY) {
+    this->data(x_end / 8u);
+    this->data(x / 8u);
+  } else {
+    this->data(x / 8u);
+    this->data(x_end / 8u);
+  }
+
+  this->command(CMD_SET_Y_ADDR | target);
+  this->data(y & 0xFF); // Y start low byte
+  this->data(y >> 8); // Y start high byte
+  this->data(y_end & 0xFF); // Y end low byte
+  this->data(y_end >> 8); // Y end high byte
+
+  this->command(CMD_SET_X_COUNTER | target);
+  if (target != CMD_TARGET_PRIMARY) {
+    this->data(x_end / 8u); // Set X counter to end position
+  } else {
+    this->data(x / 8u); // Set X counter to start position
+  }
+
+  this->command(CMD_SET_Y_COUNTER | target);
+  this->data(y & 0xFF); // Set Y counter to start position low byte
+  this->data(y >> 8); // Set Y counter to start position high byte
+}
+
+void CrowPanelEPaper5P79In::write_data_from_buffer(uint16_t x_start, uint16_t y_start, uint16_t width, uint16_t height) {
+  ESP_LOGD(TAG, "Writing data from buffer: x_start=%d, y_start=%d, width=%d, height=%d", x_start, y_start, width, height);
+  this->start_data_();
+  for (uint16_t y = y_start; y < (height + y_start); ++y) {
+    for (uint16_t x = x_start; x < (width + x_start); x += 8u) {
+      size_t index = (y * this->get_native_width_() + x) / 8u;
+      assert(index < this->get_buffer_length_());
+
+      this->write_byte_soft_spi(this->buffer_[index]);
+      // if (this->buffer_[index] != 0xFF) {
+      //   ESP_LOGD(TAG, "Writing byte %02X at index %u (x=%d, y=%d)", 
+      //            this->buffer_[index], index, x, y);
+      // }
+    }
+  }
+  this->end_data_();
+}
+
+void CrowPanelEPaper5P79In::update_sending_data_(uint32_t now) {
+  // Send a chunk of data per loop
+  // const size_t CHUNK_SIZE = 32;
+
+  uint16_t half_width = this->get_native_width_() / 2u;
+  uint16_t half_height = this->get_native_height_() / 2u;
+
+  // left half (primary controller)
+  this->set_partial_ram_area_(CMD_TARGET_PRIMARY, 0, 0, half_width, this->get_native_height_());
+  this->command(CMD_WRITE_RAM | CMD_TARGET_PRIMARY);
+  this->write_data_from_buffer(0, 0, half_width, this->get_native_height_());
+  // right half (secondary controller)
+  this->set_partial_ram_area_(CMD_TARGET_SECONDARY, 0, 0, half_width, this->get_native_height_());
+  this->command(CMD_WRITE_RAM | CMD_TARGET_SECONDARY);
+  this->write_data_from_buffer(half_width, 0, half_width, this->get_native_height_());
+
+  this->send_command_sequence_(fast_full_refresh_sequence);
+  // this->send_command_sequence_(partial_refresh_sequence);
+  this->state_ = EpdState::UPDATE_WAIT_REFRESH;
+  this->state_start_time_ = now;
+
+  // if (true) {
+  //   // this->end_data_();
+  //   // Send refresh command based on update mode
+  //   UpdateMode mode = this->is_full_update_ ? UpdateMode::FULL : UpdateMode::PARTIAL;
+  //   if (mode == UpdateMode::FULL) {
+  //     this->send_command_sequence_(full_refresh_sequence);
+  //   } else {
+  //     this->send_command_sequence_(partial_refresh_sequence);
+  //   }
+  //   this->state_ = EpdState::UPDATE_WAIT_REFRESH;
+  //   this->state_start_time_ = now;
+  // }
 }
 
 void CrowPanelEPaper5P79In::deep_sleep() {
