@@ -333,10 +333,12 @@ void CrowPanelEPaperBase::loop() {
       
       ESP_LOGD(TAG, "Performing %s display update (%u)", 
                  this->is_full_update_ ? "FULL" : "PARTIAL", this->update_count_);
-      
-      // Clear buffer to white first
-      this->fill(display::COLOR_OFF);
-      
+
+      if (this->auto_clear_enabled_) {
+        // Clear buffer to white first
+        this->fill(display::COLOR_OFF);
+      }
+
       // Execute the lambda (if set) - this draws text, shapes, etc.
       if (this->page_ != nullptr) {
         this->page_->get_writer()(*this);
