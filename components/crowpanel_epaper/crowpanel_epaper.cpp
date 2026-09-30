@@ -323,8 +323,11 @@ void CrowPanelEPaperBase::loop() {
     case EpdState::UPDATE_START:
       this->update_count_++;
       
-      // Determine update mode (forced or automatic)
-      if (this->has_forced_update_mode_) {
+      // Determine update mode: one-shot request, then forced mode, then cadence
+      if (this->full_update_requested_) {
+        this->is_full_update_ = true;
+        this->full_update_requested_ = false;
+      } else if (this->has_forced_update_mode_) {
         this->is_full_update_ = (this->force_update_mode_ == UpdateMode::FULL);
       } else {
         // Ensure the very first update is always full

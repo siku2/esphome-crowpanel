@@ -57,6 +57,8 @@ class CrowPanelEPaperBase : public display::DisplayBuffer {
     this->force_update_mode_ = mode; 
     this->has_forced_update_mode_ = true;
   }
+  void clear_update_mode() { this->has_forced_update_mode_ = false; }
+  void request_full_update() { this->full_update_requested_ = true; }
 
   float get_setup_priority() const override { return setup_priority::HARDWARE; } 
   void setup() override;
@@ -113,6 +115,7 @@ class CrowPanelEPaperBase : public display::DisplayBuffer {
   
   bool has_forced_update_mode_{false};
   UpdateMode force_update_mode_{UpdateMode::FULL};
+  bool full_update_requested_{false};
 };
 
 class CrowPanelEPaper : public CrowPanelEPaperBase {
