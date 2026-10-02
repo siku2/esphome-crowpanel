@@ -258,6 +258,7 @@ void CrowPanelEPaperBase::loop() {
         this->needs_update_ = false;
         this->state_ = EpdState::UPDATE_START;
         this->state_start_time_ = now;
+        this->high_freq_.start();
         ESP_LOGD(TAG, "Starting display update");
       }
       break;
@@ -388,6 +389,7 @@ void CrowPanelEPaperBase::loop() {
       
     case EpdState::UPDATE_DONE:
       this->state_ = EpdState::IDLE;
+      this->high_freq_.stop();
       break;
       
     case EpdState::DEEP_SLEEP:
@@ -424,6 +426,7 @@ void CrowPanelEPaperBase::do_update_() {
 
 void CrowPanelEPaperBase::on_safe_shutdown() { 
   this->state_ = EpdState::DEEP_SLEEP;
+  this->high_freq_.stop();
   this->deep_sleep(); 
 }
 

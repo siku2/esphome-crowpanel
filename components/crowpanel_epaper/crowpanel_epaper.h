@@ -116,6 +116,7 @@ class CrowPanelEPaperBase : public display::DisplayBuffer {
   bool has_forced_update_mode_{false};
   UpdateMode force_update_mode_{UpdateMode::FULL};
   bool full_update_requested_{false};
+  HighFrequencyLoopRequester high_freq_;
 };
 
 class CrowPanelEPaper : public CrowPanelEPaperBase {
