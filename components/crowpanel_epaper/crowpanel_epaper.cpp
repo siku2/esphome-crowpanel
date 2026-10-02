@@ -2,6 +2,8 @@
 #include "esphome/core/log.h"
 #include "esphome/core/application.h"
 #include "esphome/core/helpers.h"
+#include <algorithm>
+#include <cstring>
 
 namespace esphome {
 namespace crowpanel_epaper {
@@ -92,14 +94,8 @@ const uint8_t partial_refresh_sequence[] = {
 // ========================================================
 
 void CrowPanelEPaperBase::setup_pins_() {
-  // Configure all the GPIO pins
   this->dc_pin_->setup();
   this->dc_pin_->digital_write(true);
-  this->cs_pin_->setup();
-  this->cs_pin_->digital_write(true); // Initialize CS high (inactive)
-  this->clk_pin_->setup();
-  this->clk_pin_->digital_write(false); // Clock low initially
-  this->mosi_pin_->setup();
 
   if (this->reset_pin_ != nullptr)
     this->reset_pin_->setup();
@@ -108,48 +104,31 @@ void CrowPanelEPaperBase::setup_pins_() {
   }
 }
 
-void CrowPanelEPaperBase::write_byte_soft_spi(uint8_t data) {
-  for (uint8_t i = 0; i < 8; i++) {
-    this->clk_pin_->digital_write(false); // SCK Low
-    if (data & 0x80) {
-      this->mosi_pin_->digital_write(true); // MOSI High
-    } else {
-      this->mosi_pin_->digital_write(false); // MOSI Low
-    }
-    this->clk_pin_->digital_write(true); // SCK High (Clock in data)
-    data <<= 1; // Shift next bit into position
-  }
-}
-
 void CrowPanelEPaperBase::command(uint8_t value) {
-  this->start_command_();
-  this->write_byte_soft_spi(value);
-  this->end_command_();
+  this->dc_pin_->digital_write(false);
+  this->enable();
+  this->write_byte(value);
+  this->disable();
+  this->dc_pin_->digital_write(true);
 }
 
 void CrowPanelEPaperBase::data(uint8_t value) {
-  this->start_data_();
-  this->write_byte_soft_spi(value);
-  this->end_data_();
+  this->dc_pin_->digital_write(true);
+  this->enable();
+  this->write_byte(value);
+  this->disable();
 }
 
-void CrowPanelEPaperBase::start_command_() {
-  this->dc_pin_->digital_write(false); // DC Low for command
-  this->cs_pin_->digital_write(false); // CS Low (Enable chip)
+void CrowPanelEPaperBase::write_data_(const uint8_t *data, size_t length) {
+  this->dc_pin_->digital_write(true);
+  this->enable();
+  this->write_array(data, length);
+  this->disable();
 }
 
-void CrowPanelEPaperBase::end_command_() {
-  this->cs_pin_->digital_write(true); // CS High (Disable chip)
-  this->dc_pin_->digital_write(true); // Set DC back high (safer default?)
-}
-
-void CrowPanelEPaperBase::start_data_() {
-  this->dc_pin_->digital_write(true); // DC High for data
-  this->cs_pin_->digital_write(false); // CS Low (Enable chip)
-}
-
-void CrowPanelEPaperBase::end_data_() {
-  this->cs_pin_->digital_write(true); // CS High (Disable chip)
+size_t CrowPanelEPaperBase::get_chunk_size_() {
+  // Bytes that transfer in about 10 ms
+  return std::max<size_t>(this->data_rate_ / 800u, 64u);
 }
 
 void CrowPanelEPaperBase::send_command_sequence_(const uint8_t* sequence) {
@@ -242,6 +221,7 @@ void CrowPanelEPaperBase::setup() {
   
   this->fill(display::COLOR_OFF);
   this->setup_pins_();
+  this->spi_setup();
   
   // Start initialization state machine
   this->state_ = EpdState::INIT_START;
@@ -400,17 +380,12 @@ void CrowPanelEPaperBase::loop() {
 }
 
 void CrowPanelEPaperBase::update_send_data_(uint32_t now) {
-  // Send a chunk of data per loop
-  const size_t CHUNK_SIZE = 32;
   size_t buffer_len = this->get_buffer_length_();
   size_t i = this->data_send_index_;
-  size_t end = (i + CHUNK_SIZE < buffer_len) ? (i + CHUNK_SIZE) : buffer_len;
-  for (; i < end; ++i) {
-    this->write_byte_soft_spi(this->buffer_[i]);
-  }
+  size_t end = std::min(i + this->get_chunk_size_(), buffer_len);
+  this->write_data_(this->buffer_ + i, end - i);
   this->data_send_index_ = end;
   if (this->data_send_index_ >= buffer_len) {
-    this->end_data_();
     this->state_ = EpdState::UPDATE_REFRESH;
     this->state_start_time_ = now;
   }
@@ -432,13 +407,11 @@ void CrowPanelEPaperBase::on_safe_shutdown() {
 }
 
 void CrowPanelEPaperBase::dump_config() {
-    LOG_DISPLAY("", "CrowPanel E-Paper (Software SPI)", this);
-    LOG_PIN("  CS Pin: ", this->cs_pin_);
+    LOG_DISPLAY("", "CrowPanel E-Paper", this);
+    LOG_SPI_DEVICE(this);
     LOG_PIN("  DC Pin: ", this->dc_pin_);
     LOG_PIN("  Reset Pin: ", this->reset_pin_);
     LOG_PIN("  Busy Pin: ", this->busy_pin_);
-    LOG_PIN("  CLK Pin: ", this->clk_pin_);
-    LOG_PIN("  MOSI Pin: ", this->mosi_pin_);
     if (this->full_update_every_ == 0) {
       ESP_LOGCONFIG(TAG, "  Full Update Every: never (manual only)");
     } else {
@@ -602,7 +575,6 @@ void CrowPanelEPaper4P2In::display() {
   // Send command to write to BLACK/WHITE RAM
   this->command(CMD_WRITE_RAM);
   // Start non-blocking data transfer (handled in state machine)
-  this->start_data_();
   this->data_send_index_ = 0;
 }
 
@@ -616,6 +588,7 @@ void CrowPanelEPaper4P2In::deep_sleep() {
 void CrowPanelEPaper4P2In::dump_config() {
   LOG_DISPLAY("", "CrowPanel E-Paper", this);
   ESP_LOGCONFIG(TAG, "  Model: 4.2in");
+  LOG_SPI_DEVICE(this);
   LOG_PIN("  Reset Pin: ", this->reset_pin_);
   LOG_PIN("  DC Pin: ", this->dc_pin_);
   LOG_PIN("  Busy Pin: ", this->busy_pin_);
@@ -685,61 +658,54 @@ void CrowPanelEPaper5P79In::display() {
   // Start by filling the primary controller's RAM
   this->cascade_state_ = EpdCascadeState::PRIMARY;
   this->data_send_index_ = 0;
-  this->data_send_x_offset_ = 0;
   this->command(CMD_WRITE_RAM | CMD_TARGET_PRIMARY);
-  this->start_data_();
 }
 
 void CrowPanelEPaper5P79In::update_send_data_(uint32_t now) {
-  // We can easily send 2 rows of data without exceeding the 30ms limit.
-  constexpr size_t chunk_size = 2u * (NATIVE_WIDTH_5P79IN / 2u);
   constexpr uint16_t width_bytes = NATIVE_WIDTH_5P79IN / 8u;
   // It's important to round up here!
   constexpr uint16_t x_offset_end = (width_bytes + 1u) / 2u;
   // And here it's important to round down.
   constexpr uint16_t x_offset_start = width_bytes / 2u;
+  constexpr size_t max_rows = 64u;
 
   // The logic here is slightly more complex than for the 4.2in display because we have to deal
   // with two controllers, each with its own buffer. Worse, they even have an overlap in the middle.
   // Luckily for us, we can just write the 8-bit overlap data to both controllers and it will work
   // fine. That's why the rounding is important above.
   //
-  // The rest is a pretty straight-forward 2D traversal of the buffer. We do it in 2 dimensions
-  // because the buffer's layout would force us to switch controllers right in the middle of a row,
-  // which is not ideal. Instead we first write the left half of the buffer to the primary
-  // controller, then switch to the secondary controller and write the right half of the buffer.
+  // The buffer's layout would force us to switch controllers right in the middle of a row.
+  // Instead we first write the left half of every row to the primary controller, then switch to
+  // the secondary controller and write the right half of every row. Each half row is contiguous,
+  // so we gather several of them into a stack buffer and send them with a single transfer.
 
   // For the secondary controller, read from the right half of the buffer.
-  uint16_t x_start = (this->cascade_state_ == EpdCascadeState::PRIMARY) ? 0 : x_offset_start;
+  const uint16_t x_start = (this->cascade_state_ == EpdCascadeState::PRIMARY) ? 0 : x_offset_start;
+  const size_t height = this->get_native_height_();
+  const size_t rows_per_pass = std::min(std::max<size_t>(this->get_chunk_size_() / x_offset_end, 1u), max_rows);
 
-  bool done = false;
-  for (size_t i = 0; i < chunk_size; ++i) {
-    size_t index = this->data_send_index_ * width_bytes + x_start + this->data_send_x_offset_;
-    assert(index < this->get_buffer_length_());
-    this->write_byte_soft_spi(this->buffer_[index]);
-
-    ++this->data_send_x_offset_;
-    if (this->data_send_x_offset_ >= x_offset_end) {
-      this->data_send_x_offset_ = 0u;
-      ++this->data_send_index_;
-      if (this->data_send_index_ >= this->get_native_height_()) {
-        done = true;
-        break;
-      }
-    }
+  uint8_t rows[max_rows * x_offset_end];
+  size_t row = this->data_send_index_;
+  const size_t end_row = std::min(row + rows_per_pass, height);
+  uint8_t *out = rows;
+  for (; row < end_row; ++row) {
+    size_t index = row * width_bytes + x_start;
+    assert(index + x_offset_end <= this->get_buffer_length_());
+    std::memcpy(out, this->buffer_ + index, x_offset_end);
+    out += x_offset_end;
   }
+  this->write_data_(rows, out - rows);
+  this->data_send_index_ = end_row;
+
   // Still writing data...
-  if (!done) return;
+  if (this->data_send_index_ < height) return;
 
   // The current transfer is done.
-  this->end_data_();
   if (this->cascade_state_ == EpdCascadeState::PRIMARY) {
     // We finished the primary controller's data, let's switch to the secondary controller.
     this->cascade_state_ = EpdCascadeState::SECONDARY;
     this->data_send_index_ = 0;
-    this->data_send_x_offset_ = 0;
     this->command(CMD_WRITE_RAM | CMD_TARGET_SECONDARY);
-    this->start_data_();
     return;
   }
 
@@ -758,6 +724,7 @@ void CrowPanelEPaper5P79In::deep_sleep() {
 void CrowPanelEPaper5P79In::dump_config() {
   LOG_DISPLAY("", "CrowPanel E-Paper", this);
   ESP_LOGCONFIG(TAG, "  Model: 5.79in");
+  LOG_SPI_DEVICE(this);
   LOG_PIN("  Reset Pin: ", this->reset_pin_);
   LOG_PIN("  DC Pin: ", this->dc_pin_);
   LOG_PIN("  Busy Pin: ", this->busy_pin_);

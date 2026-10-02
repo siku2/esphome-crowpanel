@@ -2,6 +2,7 @@
 
 #include "esphome/core/component.h"
 #include "esphome/components/display/display_buffer.h"
+#include "esphome/components/spi/spi.h"
 #include "esphome/core/hal.h"
 
 namespace esphome {
@@ -42,12 +43,11 @@ enum class UpdateMode {
   PARTIAL
 };
 
-class CrowPanelEPaperBase : public display::DisplayBuffer {
+class CrowPanelEPaperBase : public display::DisplayBuffer,
+                            public spi::SPIDevice<spi::BIT_ORDER_MSB_FIRST, spi::CLOCK_POLARITY_LOW,
+                                                  spi::CLOCK_PHASE_LEADING, spi::DATA_RATE_10MHZ> {
  public:
   void set_dc_pin(GPIOPin *dc_pin) { dc_pin_ = dc_pin; }
-  void set_cs_pin(GPIOPin *cs_pin) { cs_pin_ = cs_pin; }
-  void set_clk_pin(GPIOPin *clk_pin) { clk_pin_ = clk_pin; }
-  void set_mosi_pin(GPIOPin *mosi_pin) { mosi_pin_ = mosi_pin; }
   void set_reset_pin(GPIOPin *reset) { this->reset_pin_ = reset; }
   void set_busy_pin(GPIOPin *busy) { this->busy_pin_ = busy; }
   
@@ -78,11 +78,8 @@ class CrowPanelEPaperBase : public display::DisplayBuffer {
   virtual void display() = 0;
   virtual void deep_sleep() = 0;
   
-  void start_command_();
-  void end_command_();
-  void start_data_();
-  void end_data_();
-  void write_byte_soft_spi(uint8_t data);
+  void write_data_(const uint8_t *data, size_t length);
+  size_t get_chunk_size_();
   void send_command_sequence_(const uint8_t* sequence);
   
   bool is_idle_();
@@ -97,9 +94,6 @@ class CrowPanelEPaperBase : public display::DisplayBuffer {
   virtual void update_send_data_(uint32_t now);
 
   GPIOPin *dc_pin_{nullptr};
-  GPIOPin *cs_pin_{nullptr};
-  GPIOPin *clk_pin_{nullptr};
-  GPIOPin *mosi_pin_{nullptr};
   GPIOPin *reset_pin_{nullptr};
   GPIOPin *busy_pin_{nullptr};
 
@@ -164,10 +158,7 @@ class CrowPanelEPaper5P79In : public CrowPanelEPaper {
   
  protected:
   EpdCascadeState cascade_state_{EpdCascadeState::PRIMARY};
-  // We use 2-dimensional addressing to stay sane.
   // data_send_index_ is the y index.
-  uint32_t data_send_x_offset_{0};
-
   uint32_t idle_timeout_() override { return 60000u; }
   int get_width_controller() override { return NATIVE_WIDTH_5P79IN; }
   int get_native_width_() override { return NATIVE_WIDTH_5P79IN; }

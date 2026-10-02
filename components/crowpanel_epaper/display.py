@@ -1,11 +1,10 @@
 from esphome import core, pins
 import esphome.codegen as cg
-from esphome.components import display
+from esphome.components import display, spi
 import esphome.config_validation as cv
 from esphome.const import (
     CONF_BUSY_PIN,
     CONF_DC_PIN,
-    CONF_CS_PIN,
     CONF_ID,
     CONF_FULL_UPDATE_EVERY,
     CONF_LAMBDA,
@@ -13,14 +12,12 @@ from esphome.const import (
     CONF_PAGES,
     CONF_RESET_DURATION,
     CONF_RESET_PIN,
-    CONF_CLK_PIN,
-    CONF_MOSI_PIN,
     CONF_ROTATION,
 )
 
 crowpanel_epaper_ns = cg.esphome_ns.namespace("crowpanel_epaper")
 CrowPanelEPaperBase = crowpanel_epaper_ns.class_(
-    "CrowPanelEPaperBase", display.DisplayBuffer
+    "CrowPanelEPaperBase", display.DisplayBuffer, spi.SPIDevice
 )
 CrowPanelEPaper = crowpanel_epaper_ns.class_("CrowPanelEPaper", CrowPanelEPaperBase)
 
@@ -40,9 +37,6 @@ CONFIG_SCHEMA = cv.All(
     display.FULL_DISPLAY_SCHEMA.extend(
         {
             cv.GenerateID(): cv.declare_id(CrowPanelEPaperBase),
-            cv.Required(CONF_CLK_PIN): pins.gpio_output_pin_schema,
-            cv.Required(CONF_MOSI_PIN): pins.gpio_output_pin_schema,
-            cv.Required(CONF_CS_PIN): pins.gpio_output_pin_schema,
             cv.Required(CONF_DC_PIN): pins.gpio_output_pin_schema,
             cv.Required(CONF_RESET_PIN): pins.gpio_output_pin_schema,
             cv.Required(CONF_BUSY_PIN): pins.gpio_input_pin_schema,
@@ -53,7 +47,8 @@ CONFIG_SCHEMA = cv.All(
             ),
             cv.Optional(CONF_FULL_UPDATE_EVERY): cv.positive_int,
         }
-    ),
+    )
+    .extend(spi.spi_device_schema()),
     cv.has_at_most_one_key(CONF_PAGES, CONF_LAMBDA),
 )
 
@@ -64,21 +59,16 @@ async def to_code(config):
     var = cg.Pvariable(config[CONF_ID], rhs, model_class)
     
     # Configure pins
-    clk_pin_expr = await cg.gpio_pin_expression(config[CONF_CLK_PIN])
-    mosi_pin_expr = await cg.gpio_pin_expression(config[CONF_MOSI_PIN])
-    cs_pin_expr = await cg.gpio_pin_expression(config[CONF_CS_PIN])
     dc_pin_expr = await cg.gpio_pin_expression(config[CONF_DC_PIN])
     reset_pin_expr = await cg.gpio_pin_expression(config[CONF_RESET_PIN])
     busy_pin_expr = await cg.gpio_pin_expression(config[CONF_BUSY_PIN])
     
-    cg.add(var.set_clk_pin(clk_pin_expr))
-    cg.add(var.set_mosi_pin(mosi_pin_expr))
-    cg.add(var.set_cs_pin(cs_pin_expr))
     cg.add(var.set_dc_pin(dc_pin_expr))
     cg.add(var.set_reset_pin(reset_pin_expr))
     cg.add(var.set_busy_pin(busy_pin_expr))
 
     await display.register_display(var, config)
+    await spi.register_spi_device(var, config, write_only=True)
 
     # Set full update frequency if specified
     if CONF_FULL_UPDATE_EVERY in config:
