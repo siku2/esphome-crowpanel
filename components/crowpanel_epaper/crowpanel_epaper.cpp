@@ -331,8 +331,9 @@ void CrowPanelEPaperBase::loop() {
       } else if (this->has_forced_update_mode_) {
         this->is_full_update_ = (this->force_update_mode_ == UpdateMode::FULL);
       } else {
-        // Ensure the very first update is always full
-        this->is_full_update_ = (this->update_count_ == 1 || (this->update_count_ % this->full_update_every_ == 0));
+        // Ensure the very first update is always full. A cadence of 0 disables automatic full updates.
+        this->is_full_update_ = (this->update_count_ == 1 ||
+                                 (this->full_update_every_ != 0 && this->update_count_ % this->full_update_every_ == 0));
       }
       
       ESP_LOGD(TAG, "Performing %s display update (%u)", 
@@ -438,7 +439,11 @@ void CrowPanelEPaperBase::dump_config() {
     LOG_PIN("  Busy Pin: ", this->busy_pin_);
     LOG_PIN("  CLK Pin: ", this->clk_pin_);
     LOG_PIN("  MOSI Pin: ", this->mosi_pin_);
-    ESP_LOGCONFIG(TAG, "  Full Update Every: %u", this->full_update_every_);
+    if (this->full_update_every_ == 0) {
+      ESP_LOGCONFIG(TAG, "  Full Update Every: never (manual only)");
+    } else {
+      ESP_LOGCONFIG(TAG, "  Full Update Every: %u", this->full_update_every_);
+    }
     
     const char *rotation_str;
     switch (this->rotation_) {
