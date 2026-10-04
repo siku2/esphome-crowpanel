@@ -18,6 +18,7 @@ static const uint8_t CMD_DEEP_SLEEP = 0x10;
 static const uint8_t CMD_DATA_ENTRY_MODE = 0x11;
 static const uint8_t CMD_BORDER_WAVEFORM = 0x3C;
 static const uint8_t CMD_WRITE_RAM = 0x24;
+static const uint8_t CMD_WRITE_RAM_PREVIOUS = 0x26;
 static const uint8_t CMD_UPDATE_SEQUENCE = 0x22;
 static const uint8_t CMD_SET_X_ADDR = 0x44;
 static const uint8_t CMD_SET_Y_ADDR = 0x45;
@@ -363,9 +364,22 @@ void CrowPanelEPaperBase::loop() {
     }
     case EpdState::UPDATE_WAIT_REFRESH:
       if (this->is_idle_() || now - this->state_start_time_ > this->idle_timeout_()) {
-        this->state_ = EpdState::UPDATE_DONE;
-        ESP_LOGD(TAG, "Display update complete");
+        if (this->has_post_refresh_sync_()) {
+          this->state_ = EpdState::UPDATE_SYNC_PREPARE;
+        } else {
+          this->state_ = EpdState::UPDATE_DONE;
+          ESP_LOGD(TAG, "Display update complete");
+        }
+        this->state_start_time_ = now;
       }
+      break;
+    case EpdState::UPDATE_SYNC_PREPARE:
+      this->prepare_post_refresh_sync_();
+      this->state_ = EpdState::UPDATE_SYNC_SENDING;
+      this->state_start_time_ = now;
+      break;
+    case EpdState::UPDATE_SYNC_SENDING:
+      this->update_send_data_(now);
       break;
       
     case EpdState::UPDATE_DONE:
@@ -636,29 +650,86 @@ void CrowPanelEPaper5P79In::prepare_for_update_(UpdateMode mode) {
   }
 }
 
+static const RamPass full_ram_passes[] = {
+  {CMD_WRITE_RAM_PREVIOUS, EpdCascadeState::PRIMARY},
+  {CMD_WRITE_RAM_PREVIOUS, EpdCascadeState::SECONDARY},
+  {CMD_WRITE_RAM, EpdCascadeState::PRIMARY},
+  {CMD_WRITE_RAM, EpdCascadeState::SECONDARY},
+};
+
+static const RamPass partial_ram_passes[] = {
+  {CMD_WRITE_RAM, EpdCascadeState::PRIMARY},
+  {CMD_WRITE_RAM, EpdCascadeState::SECONDARY},
+};
+
+static const RamPass sync_ram_passes[] = {
+  {CMD_WRITE_RAM_PREVIOUS, EpdCascadeState::PRIMARY},
+  {CMD_WRITE_RAM_PREVIOUS, EpdCascadeState::SECONDARY},
+  {CMD_WRITE_RAM, EpdCascadeState::PRIMARY},
+  {CMD_WRITE_RAM, EpdCascadeState::SECONDARY},
+};
+
+void CrowPanelEPaper5P79In::setup() {
+  CrowPanelEPaperBase::setup();
+  if (this->buffer_ == nullptr) {
+    this->mark_failed();
+    return;
+  }
+  RAMAllocator<uint8_t> allocator;
+  this->snapshot_ = allocator.allocate(this->get_buffer_length_());
+  if (this->snapshot_ == nullptr) {
+    ESP_LOGE(TAG, "Could not allocate snapshot buffer for display!");
+    this->mark_failed();
+  }
+}
+
+void CrowPanelEPaper5P79In::start_pass_() {
+  const RamPass &pass = this->passes_[this->pass_index_];
+  // Reset the RAM address counters of the controller that receives this pass
+  if (pass.target == EpdCascadeState::PRIMARY) {
+    // Primary controller (start from top-left)
+    this->command(CMD_SET_X_COUNTER | CMD_TARGET_PRIMARY);
+    this->data(0x00);
+    this->command(CMD_SET_Y_COUNTER | CMD_TARGET_PRIMARY);
+  } else {
+    // Secondary controller (start from top-right)
+    this->command(CMD_SET_X_COUNTER | CMD_TARGET_SECONDARY);
+    this->data(0x31); // 49b -> 400px
+    this->command(CMD_SET_Y_COUNTER | CMD_TARGET_SECONDARY);
+  }
+  this->data(0x00);
+  this->data(0x00);
+
+  this->cascade_state_ = pass.target;
+  this->data_send_index_ = 0;
+  this->command(pass.command | (pass.target == EpdCascadeState::PRIMARY ? CMD_TARGET_PRIMARY : CMD_TARGET_SECONDARY));
+}
+
 void CrowPanelEPaper5P79In::display() {
   ESP_LOGD(TAG, "E-Paper display refresh starting");
   // Set the display mode based on update type
   UpdateMode mode = this->is_full_update_ ? UpdateMode::FULL : UpdateMode::PARTIAL;
   this->prepare_for_update_(mode);
-  // Reset RAM address counters before writing data
-  // Primary controller (start from top-left)
-  this->command(CMD_SET_X_COUNTER | CMD_TARGET_PRIMARY);
-  this->data(0x00);
-  this->command(CMD_SET_Y_COUNTER| CMD_TARGET_PRIMARY);
-  this->data(0x00);
-  this->data(0x00);
-  // Secondary controller (start from top-right)
-  this->command(CMD_SET_X_COUNTER | CMD_TARGET_SECONDARY);
-  this->data(0x31); // 49b -> 400px
-  this->command(CMD_SET_Y_COUNTER | CMD_TARGET_SECONDARY);
-  this->data(0x00);
-  this->data(0x00);
 
-  // Start by filling the primary controller's RAM
-  this->cascade_state_ = EpdCascadeState::PRIMARY;
-  this->data_send_index_ = 0;
-  this->command(CMD_WRITE_RAM | CMD_TARGET_PRIMARY);
+  // The buffer keeps changing while the transfer runs, so every RAM write sends this copy.
+  std::memcpy(this->snapshot_, this->buffer_, this->get_buffer_length_());
+
+  if (mode == UpdateMode::FULL) {
+    this->passes_ = full_ram_passes;
+    this->pass_count_ = sizeof(full_ram_passes) / sizeof(full_ram_passes[0]);
+  } else {
+    this->passes_ = partial_ram_passes;
+    this->pass_count_ = sizeof(partial_ram_passes) / sizeof(partial_ram_passes[0]);
+  }
+  this->pass_index_ = 0;
+  this->start_pass_();
+}
+
+void CrowPanelEPaper5P79In::prepare_post_refresh_sync_() {
+  this->passes_ = sync_ram_passes;
+  this->pass_count_ = sizeof(sync_ram_passes) / sizeof(sync_ram_passes[0]);
+  this->pass_index_ = 0;
+  this->start_pass_();
 }
 
 void CrowPanelEPaper5P79In::update_send_data_(uint32_t now) {
@@ -691,7 +762,7 @@ void CrowPanelEPaper5P79In::update_send_data_(uint32_t now) {
   for (; row < end_row; ++row) {
     size_t index = row * width_bytes + x_start;
     assert(index + x_offset_end <= this->get_buffer_length_());
-    std::memcpy(out, this->buffer_ + index, x_offset_end);
+    std::memcpy(out, this->snapshot_ + index, x_offset_end);
     out += x_offset_end;
   }
   this->write_data_(rows, out - rows);
@@ -701,16 +772,18 @@ void CrowPanelEPaper5P79In::update_send_data_(uint32_t now) {
   if (this->data_send_index_ < height) return;
 
   // The current transfer is done.
-  if (this->cascade_state_ == EpdCascadeState::PRIMARY) {
-    // We finished the primary controller's data, let's switch to the secondary controller.
-    this->cascade_state_ = EpdCascadeState::SECONDARY;
-    this->data_send_index_ = 0;
-    this->command(CMD_WRITE_RAM | CMD_TARGET_SECONDARY);
+  if (++this->pass_index_ < this->pass_count_) {
+    this->start_pass_();
     return;
   }
 
-  // We're done with both controllers.
-  this->state_ = EpdState::UPDATE_REFRESH;
+  // All RAM passes are done.
+  if (this->state_ == EpdState::UPDATE_SYNC_SENDING) {
+    this->state_ = EpdState::UPDATE_DONE;
+    ESP_LOGD(TAG, "Display update complete");
+  } else {
+    this->state_ = EpdState::UPDATE_REFRESH;
+  }
   this->state_start_time_ = now;
 }
 

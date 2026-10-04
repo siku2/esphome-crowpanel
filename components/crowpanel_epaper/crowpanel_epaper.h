@@ -34,6 +34,8 @@ enum class EpdState {
   UPDATE_SENDING_DATA,
   UPDATE_REFRESH,
   UPDATE_WAIT_REFRESH,
+  UPDATE_SYNC_PREPARE,
+  UPDATE_SYNC_SENDING,
   UPDATE_DONE,
   DEEP_SLEEP,
 };
@@ -92,6 +94,8 @@ class CrowPanelEPaperBase : public display::DisplayBuffer,
   bool calculate_rotated_coords_(int x, int y, int width, int height, int *out_x, int *out_y);
 
   virtual void update_send_data_(uint32_t now);
+  virtual bool has_post_refresh_sync_() { return false; }
+  virtual void prepare_post_refresh_sync_() {}
 
   GPIOPin *dc_pin_{nullptr};
   GPIOPin *reset_pin_{nullptr};
@@ -149,8 +153,14 @@ enum class EpdCascadeState {
   SECONDARY,
 };
 
+struct RamPass {
+  uint8_t command;
+  EpdCascadeState target;
+};
+
 class CrowPanelEPaper5P79In : public CrowPanelEPaper {
  public:
+  void setup() override;
   void initialize() override;
   void display() override;
   void dump_config() override;
@@ -158,6 +168,10 @@ class CrowPanelEPaper5P79In : public CrowPanelEPaper {
   
  protected:
   EpdCascadeState cascade_state_{EpdCascadeState::PRIMARY};
+  uint8_t *snapshot_{nullptr};
+  const RamPass *passes_{nullptr};
+  size_t pass_count_{0};
+  size_t pass_index_{0};
   // data_send_index_ is the y index.
   uint32_t idle_timeout_() override { return 60000u; }
   int get_width_controller() override { return NATIVE_WIDTH_5P79IN; }
@@ -166,6 +180,9 @@ class CrowPanelEPaper5P79In : public CrowPanelEPaper {
 
   void prepare_for_update_(UpdateMode mode);
   void update_send_data_(uint32_t now) override;
+  bool has_post_refresh_sync_() override { return true; }
+  void prepare_post_refresh_sync_() override;
+  void start_pass_();
 };
 
 }  // namespace crowpanel_epaper
