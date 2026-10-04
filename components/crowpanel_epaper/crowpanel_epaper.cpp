@@ -3,6 +3,7 @@
 #include "esphome/core/application.h"
 #include "esphome/core/helpers.h"
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 
 namespace esphome {
@@ -25,6 +26,8 @@ static const uint8_t CMD_SET_Y_ADDR = 0x45;
 static const uint8_t CMD_SET_X_COUNTER = 0x4E;
 static const uint8_t CMD_SET_Y_COUNTER = 0x4F;
 static const uint8_t CMD_SET_MUX = 0x01;
+static const uint8_t CMD_TEMPERATURE_SENSOR = 0x18;
+static const uint8_t CMD_WRITE_TEMPERATURE = 0x1A;
 
 // Explicit target selection when the SSD1683 is used in cascade mode.
 static const uint8_t CMD_TARGET_PRIMARY = 0x00;
@@ -35,6 +38,10 @@ static const uint8_t PARAM_BORDER_FULL = 0x05;
 static const uint8_t PARAM_BORDER_PARTIAL = 0x80;
 static const uint8_t PARAM_FULL_UPDATE = 0xF7;
 static const uint8_t PARAM_PARTIAL_UPDATE = 0xFF;
+static const uint8_t PARAM_FULL_UPDATE_KEEP_TEMPERATURE = 0xD7;
+static const uint8_t PARAM_PARTIAL_UPDATE_KEEP_TEMPERATURE = 0xDF;
+static const uint8_t PARAM_TEMPERATURE_INTERNAL = 0x80;
+static const int8_t FAST_FULL_UPDATE_TEMPERATURE = 100;
 static const uint8_t PARAM_DEEP_SLEEP_MODE = 0x01;
 static const uint8_t PARAM_X_INC_Y_INC = 0x03; // left-right, top-down
 static const uint8_t PARAM_X_DEC_Y_INC = 0x02; // right-left, top-down
@@ -61,6 +68,7 @@ const uint8_t display_start_sequence[] = {
 
 const uint8_t display_start_sequence_5p79in[] = {
   CMD_SOFT_RESET, DELAY_FLAG, 10,                        // Soft reset and 10ms delay
+  CMD_TEMPERATURE_SENSOR, 0x01, PARAM_TEMPERATURE_INTERNAL, // Use the internal temperature sensor
   // Do not set MUX. Not sure why, but it causes issues with the 5.79in display.
   // Set up the RAM area for the primary controller
   CMD_DATA_ENTRY_MODE | CMD_TARGET_PRIMARY, 0x01, PARAM_X_INC_Y_INC, // This panel goes from left to right.
@@ -84,11 +92,27 @@ const uint8_t full_refresh_sequence[] = {
   COMMAND_END_MARKER, COMMAND_END_MARKER             // End marker
 };
 
+const uint8_t full_refresh_keep_temperature_sequence[] = {
+  CMD_UPDATE_SEQUENCE, 0x01, PARAM_FULL_UPDATE_KEEP_TEMPERATURE, // Display update sequence option (full, no temperature load)
+  CMD_DISPLAY_UPDATE, DELAY_FLAG, 10,                // Master activation with 10ms delay
+  COMMAND_END_MARKER, COMMAND_END_MARKER             // End marker
+};
+
 const uint8_t partial_refresh_sequence[] = {
   CMD_UPDATE_SEQUENCE, 0x01, PARAM_PARTIAL_UPDATE,   // Display update sequence option (partial)
   CMD_DISPLAY_UPDATE, DELAY_FLAG, 10,                // Master activation with 10ms delay
   COMMAND_END_MARKER, COMMAND_END_MARKER             // End marker
 };
+
+const uint8_t partial_refresh_keep_temperature_sequence[] = {
+  CMD_UPDATE_SEQUENCE, 0x01, PARAM_PARTIAL_UPDATE_KEEP_TEMPERATURE, // Display update sequence option (partial, no temperature load)
+  CMD_DISPLAY_UPDATE, DELAY_FLAG, 10,                // Master activation with 10ms delay
+  COMMAND_END_MARKER, COMMAND_END_MARKER             // End marker
+};
+
+void CrowPanelEPaperBase::send_refresh_sequence_(bool full) {
+  this->send_command_sequence_(full ? full_refresh_sequence : partial_refresh_sequence);
+}
 
 // ========================================================
 // CrowPanelEPaperBase Implementation - SPI Communication
@@ -352,12 +376,7 @@ void CrowPanelEPaperBase::loop() {
       break;
     case EpdState::UPDATE_REFRESH: {
       // Send refresh command based on update mode
-      UpdateMode mode = this->is_full_update_ ? UpdateMode::FULL : UpdateMode::PARTIAL;
-      if (mode == UpdateMode::FULL) {
-        this->send_command_sequence_(full_refresh_sequence);
-      } else {
-        this->send_command_sequence_(partial_refresh_sequence);
-      }
+      this->send_refresh_sequence_(this->is_full_update_);
       this->state_ = EpdState::UPDATE_WAIT_REFRESH;
       this->state_start_time_ = now;
       break;
@@ -801,7 +820,41 @@ void CrowPanelEPaper5P79In::dump_config() {
   LOG_PIN("  Reset Pin: ", this->reset_pin_);
   LOG_PIN("  DC Pin: ", this->dc_pin_);
   LOG_PIN("  Busy Pin: ", this->busy_pin_);
+  ESP_LOGCONFIG(TAG, "  Fast Full Update: %s", YESNO(this->fast_full_update_));
+#ifdef USE_SENSOR
+  if (this->temperature_sensor_ != nullptr) {
+    LOG_SENSOR("  ", "Temperature Sensor", this->temperature_sensor_);
+  } else
+#endif
+  {
+    ESP_LOGCONFIG(TAG, "  Temperature Source: internal");
+  }
   LOG_UPDATE_INTERVAL(this);
+}
+
+void CrowPanelEPaper5P79In::write_temperature_(int8_t celsius) {
+  this->command(CMD_WRITE_TEMPERATURE);
+  this->data(static_cast<uint8_t>(celsius));
+  this->data(0x00);
+}
+
+void CrowPanelEPaper5P79In::send_refresh_sequence_(bool full) {
+  if (full && this->fast_full_update_) {
+    this->write_temperature_(FAST_FULL_UPDATE_TEMPERATURE);
+    this->send_command_sequence_(full_refresh_keep_temperature_sequence);
+    return;
+  }
+#ifdef USE_SENSOR
+  if (this->temperature_sensor_ != nullptr && this->temperature_sensor_->has_state() &&
+      !std::isnan(this->temperature_sensor_->state)) {
+    float celsius = std::min(std::max(std::round(this->temperature_sensor_->state), -128.0f), 127.0f);
+    this->write_temperature_(static_cast<int8_t>(celsius));
+    this->send_command_sequence_(full ? full_refresh_keep_temperature_sequence
+                                      : partial_refresh_keep_temperature_sequence);
+    return;
+  }
+#endif
+  CrowPanelEPaperBase::send_refresh_sequence_(full);
 }
 
 }  // namespace crowpanel_epaper

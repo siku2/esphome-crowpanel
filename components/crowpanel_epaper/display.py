@@ -1,6 +1,6 @@
 from esphome import core, pins
 import esphome.codegen as cg
-from esphome.components import display, spi
+from esphome.components import display, sensor, spi
 import esphome.config_validation as cv
 from esphome.const import (
     CONF_BUSY_PIN,
@@ -13,7 +13,10 @@ from esphome.const import (
     CONF_RESET_DURATION,
     CONF_RESET_PIN,
     CONF_ROTATION,
+    CONF_TEMPERATURE,
 )
+
+CONF_FAST_FULL_UPDATE = "fast_full_update"
 
 crowpanel_epaper_ns = cg.esphome_ns.namespace("crowpanel_epaper")
 CrowPanelEPaperBase = crowpanel_epaper_ns.class_(
@@ -33,6 +36,30 @@ MODELS = {
     "5.79in": CrowPanelEPaper5P79In,
 }
 
+INTERNAL = "internal"
+
+
+def temperature_source(value):
+    if isinstance(value, str) and value.lower() == INTERNAL:
+        return INTERNAL
+    return cv.use_id(sensor.Sensor)(value)
+
+
+def validate_5p79in_only(config):
+    if config[CONF_MODEL] != "5.79in":
+        if config.get(CONF_FAST_FULL_UPDATE):
+            raise cv.Invalid(
+                f"'{CONF_FAST_FULL_UPDATE}' is only supported on the 5.79in model",
+                path=[CONF_FAST_FULL_UPDATE],
+            )
+        if CONF_TEMPERATURE in config:
+            raise cv.Invalid(
+                f"'{CONF_TEMPERATURE}' is only supported on the 5.79in model",
+                path=[CONF_TEMPERATURE],
+            )
+    return config
+
+
 CONFIG_SCHEMA = cv.All(
     display.FULL_DISPLAY_SCHEMA.extend(
         {
@@ -46,10 +73,13 @@ CONFIG_SCHEMA = cv.All(
                 cv.Range(max=core.TimePeriod(milliseconds=500)),
             ),
             cv.Optional(CONF_FULL_UPDATE_EVERY): cv.positive_int,
+            cv.Optional(CONF_FAST_FULL_UPDATE): cv.boolean,
+            cv.Optional(CONF_TEMPERATURE): temperature_source,
         }
     )
     .extend(spi.spi_device_schema()),
     cv.has_at_most_one_key(CONF_PAGES, CONF_LAMBDA),
+    validate_5p79in_only,
 )
 
 async def to_code(config):
@@ -74,6 +104,13 @@ async def to_code(config):
     if CONF_FULL_UPDATE_EVERY in config:
         cg.add(var.set_full_update_every(config[CONF_FULL_UPDATE_EVERY]))
         
+    if config.get(CONF_FAST_FULL_UPDATE):
+        cg.add(var.set_fast_full_update(True))
+
+    if CONF_TEMPERATURE in config and config[CONF_TEMPERATURE] != INTERNAL:
+        temperature = await cg.get_variable(config[CONF_TEMPERATURE])
+        cg.add(var.set_temperature_sensor(temperature))
+
     # Set rotation if specified
     if CONF_ROTATION in config:
         rotation_val = config[CONF_ROTATION]

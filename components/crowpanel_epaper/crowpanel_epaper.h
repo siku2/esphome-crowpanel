@@ -4,6 +4,9 @@
 #include "esphome/components/display/display_buffer.h"
 #include "esphome/components/spi/spi.h"
 #include "esphome/core/hal.h"
+#ifdef USE_SENSOR
+#include "esphome/components/sensor/sensor.h"
+#endif
 
 namespace esphome {
 namespace crowpanel_epaper {
@@ -94,6 +97,7 @@ class CrowPanelEPaperBase : public display::DisplayBuffer,
   bool calculate_rotated_coords_(int x, int y, int width, int height, int *out_x, int *out_y);
 
   virtual void update_send_data_(uint32_t now);
+  virtual void send_refresh_sequence_(bool full);
   virtual bool has_post_refresh_sync_() { return false; }
   virtual void prepare_post_refresh_sync_() {}
 
@@ -165,8 +169,17 @@ class CrowPanelEPaper5P79In : public CrowPanelEPaper {
   void display() override;
   void dump_config() override;
   void deep_sleep() override;
+  void set_fast_full_update(bool fast_full_update) { this->fast_full_update_ = fast_full_update; }
+  bool get_fast_full_update() const { return this->fast_full_update_; }
+#ifdef USE_SENSOR
+  void set_temperature_sensor(sensor::Sensor *sensor) { this->temperature_sensor_ = sensor; }
+#endif
   
  protected:
+  bool fast_full_update_{false};
+#ifdef USE_SENSOR
+  sensor::Sensor *temperature_sensor_{nullptr};
+#endif
   EpdCascadeState cascade_state_{EpdCascadeState::PRIMARY};
   uint8_t *snapshot_{nullptr};
   const RamPass *passes_{nullptr};
@@ -179,6 +192,8 @@ class CrowPanelEPaper5P79In : public CrowPanelEPaper {
   int get_native_height_() override { return NATIVE_HEIGHT_5P79IN; }
 
   void prepare_for_update_(UpdateMode mode);
+  void write_temperature_(int8_t celsius);
+  void send_refresh_sequence_(bool full) override;
   void update_send_data_(uint32_t now) override;
   bool has_post_refresh_sync_() override { return true; }
   void prepare_post_refresh_sync_() override;
